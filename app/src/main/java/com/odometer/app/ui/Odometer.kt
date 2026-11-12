@@ -85,7 +85,7 @@ object OdometerDefaults {
         spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 20f)
 
     fun colors(
-        housing: Color = Color(0xFF07080B),
+        housing: Color = Color(0xB3050608),
         wheel: Color = Color(0xFF1C1F26),
         wheelEdge: Color = Color(0xFF0D0F13),
         digit: Color = Color(0xFFF3F1EA),

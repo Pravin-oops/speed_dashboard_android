@@ -15,6 +15,8 @@ and trip odometers with fluid, mechanical wheel motion.
 - **Navigation**: the MAPS button opens Google Maps beside the dashboard in split screen
   (Android 12L+). While sharing the screen, the app shows only the speedometer and edge glow;
   distances keep counting.
+- **Liquid glass look**: panels and buttons are translucent glass panes with bright rims over
+  a soft coloured backdrop, with large ColorOS-style corners, and they give slightly when pressed.
 - **Glove-safe**: anything that changes data needs a long press (hold Trip to reset it, hold
   Total to set it to your bike's reading).
 - **Wheels**: each digit wheel is a spring that keeps its velocity between GPS fixes, follows
@@ -27,6 +29,8 @@ Speed and distance are only tracked while the app is on screen.
 - `RideTracker.kt` - GPS fixes to speed and distance, persistence
 - `ui/DashboardScreen.kt` - landscape and portrait layouts
 - `ui/Speedometer.kt` - the dial
+- `ui/EdgeGlow.kt` - the riding-style light around the screen edge
+- `ui/Glass.kt` - glass panes, press effect and backdrop
 - `ui/Odometer.kt` - the reusable rolling-wheel composable
 
 ## Build

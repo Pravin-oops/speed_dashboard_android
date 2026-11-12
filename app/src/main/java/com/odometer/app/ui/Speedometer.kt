@@ -98,8 +98,13 @@ fun Speedometer(
         val arcTopLeft = Offset(center.x - radius, center.y - radius)
         val arcSize = Size(radius * 2f, radius * 2f)
 
+        // The empty track is a channel of clear glass, brighter where the light hits the top.
         drawArc(
-            color = Color(0xFF1C1F26),
+            brush = Brush.verticalGradient(
+                listOf(Color.White.copy(alpha = 0.17f), Color.White.copy(alpha = 0.06f)),
+                startY = center.y - outer,
+                endY = center.y + outer * 0.5f,
+            ),
             startAngle = StartAngle,
             sweepAngle = SweepAngle,
             useCenter = false,
@@ -140,6 +145,18 @@ fun Speedometer(
                     topLeft = arcTopLeft,
                     size = arcSize,
                     style = Stroke(stroke, cap = StrokeCap.Round),
+                )
+                // A thin specular streak along the outer side, so the fill reads as liquid
+                // in a tube rather than a flat band.
+                val glossRadius = radius + stroke * 0.2f
+                drawArc(
+                    color = Color.White.copy(alpha = 0.3f),
+                    startAngle = SeamOffset,
+                    sweepAngle = SweepAngle * fraction,
+                    useCenter = false,
+                    topLeft = Offset(center.x - glossRadius, center.y - glossRadius),
+                    size = Size(glossRadius * 2f, glossRadius * 2f),
+                    style = Stroke(stroke * 0.14f, cap = StrokeCap.Round),
                 )
             }
         }

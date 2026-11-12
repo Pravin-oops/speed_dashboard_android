@@ -11,8 +11,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,7 +51,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -67,10 +68,7 @@ import com.odometer.app.RideTracker
 import com.odometer.app.ui.theme.Amber
 import com.odometer.app.ui.theme.Chalk
 import com.odometer.app.ui.theme.EcoGreen
-import com.odometer.app.ui.theme.Ink
 import com.odometer.app.ui.theme.Muted
-import com.odometer.app.ui.theme.Panel
-import com.odometer.app.ui.theme.PanelEdge
 import com.odometer.app.ui.theme.Signal
 import kotlinx.coroutines.delay
 import java.util.Date
@@ -191,13 +189,15 @@ fun DashboardScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
+        // Pools of soft colour for the glass panes above to pick up.
+        AmbientBackdrop(Modifier.fillMaxSize())
+
         if (compact) {
             // Sharing the screen with a map: the dial takes the whole window. The GPS line
             // only appears when something is wrong, since a 0 would otherwise be misleading.
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(Brush.verticalGradient(listOf(Ink, Color(0xFF12141A), Ink)))
                     .safeDrawingPadding()
                     .padding(8.dp),
             ) {
@@ -214,7 +214,6 @@ fun DashboardScreen(
         } else BoxWithConstraints(
             Modifier
                 .fillMaxSize()
-                .background(Brush.verticalGradient(listOf(Ink, Color(0xFF12141A), Ink)))
                 .safeDrawingPadding()
                 .padding(12.dp),
         ) {
@@ -338,6 +337,8 @@ private fun GpsPill(
 
 @Composable
 private fun Chip(text: String, color: Color, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     Text(
         text = text,
         color = color,
@@ -346,23 +347,34 @@ private fun Chip(text: String, color: Color, onClick: () -> Unit) {
         fontWeight = FontWeight.Medium,
         maxLines = 1,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(50))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .liquidPress(pressed)
+            .glass(PillShape)
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
     )
 }
 
+/** A glass pane that gives a little while held and runs [onHold] on a long press. */
 @Composable
 private fun Section(onHold: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val hold by rememberUpdatedState(onHold)
+    var pressed by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(Panel)
-            .border(1.dp, PanelEdge, RoundedCornerShape(20.dp))
-            .onHold(onHold)
-            .padding(12.dp),
+            .liquidPress(pressed, pressedScale = 0.975f)
+            .glass()
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onLongPress = { hold() },
+                )
+            }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         content = content,
     )
 }
