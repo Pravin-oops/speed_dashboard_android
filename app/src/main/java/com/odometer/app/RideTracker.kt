@@ -18,9 +18,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlin.math.abs
 import kotlin.math.max
 
 enum class GpsState { NoPermission, Disabled, Searching, Fix }
+
+/** How hard the rider is changing speed right now. */
+enum class DriveStyle { Eco, Brisk, SuddenAcceleration, HardBraking }
 
 /**
  * Turns GPS fixes into a live speed and running distances.
@@ -53,6 +57,12 @@ class RideTracker(context: Context) : LocationListener {
     var accuracyMeters by mutableFloatStateOf(0f)
         private set
 
+    /** Change in speed between the last two fixes, in m/s². Negative while slowing down. */
+    var accelerationMps2 by mutableFloatStateOf(0f)
+        private set
+    var driveStyle by mutableStateOf(DriveStyle.Eco)
+        private set
+
     /** Average speed over the time actually spent moving this trip. */
     val averageKmh: Float
         get() = if (movingMillis < 1_000L) 0f else (tripKm / (movingMillis / 3_600_000.0)).toFloat()
@@ -61,10 +71,13 @@ class RideTracker(context: Context) : LocationListener {
     private var lastFix: Location? = null
     private var lastSpeedMps = 0f
     private var lastSavedAt = 0L
+    private var suddenUntil = 0L
+    private var suddenWasBraking = false
 
     private val signalLost = Runnable {
         speedKmh = 0f
         lastSpeedMps = 0f
+        clearAcceleration()
         if (listening && gpsState == GpsState.Fix) gpsState = GpsState.Searching
     }
 
@@ -103,6 +116,7 @@ class RideTracker(context: Context) : LocationListener {
         lastFix = null
         lastSpeedMps = 0f
         speedKmh = 0f
+        clearAcceleration()
         if (gpsState == GpsState.Fix) gpsState = GpsState.Searching
         save()
     }
@@ -160,6 +174,10 @@ class RideTracker(context: Context) : LocationListener {
                 if (seconds <= MAX_GAP_S) movingMillis += (seconds * 1000).toLong()
             }
         }
+        // Acceleration is only meaningful between two good fixes a moment apart.
+        val comparable = reliable && previous != null && seconds > 0.0 && seconds <= MAX_GAP_S
+        updateDriveStyle(if (comparable) ((speedMps - lastSpeedMps) / seconds).toFloat() else 0f)
+
         if (reliable) {
             lastFix = location
             lastSpeedMps = speedMps
@@ -181,10 +199,32 @@ class RideTracker(context: Context) : LocationListener {
         gpsState = GpsState.Disabled
         speedKmh = 0f
         lastSpeedMps = 0f
+        clearAcceleration()
     }
 
     @Deprecated("Deprecated in Java")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+
+    private fun updateDriveStyle(acceleration: Float) {
+        accelerationMps2 = acceleration
+        val now = SystemClock.elapsedRealtime()
+        if (abs(acceleration) >= SUDDEN_MPS2) {
+            // Hold the warning for a moment so a one-second spike is still noticed.
+            suddenUntil = now + SUDDEN_HOLD_MS
+            suddenWasBraking = acceleration < 0f
+        }
+        driveStyle = when {
+            now < suddenUntil -> if (suddenWasBraking) DriveStyle.HardBraking else DriveStyle.SuddenAcceleration
+            abs(acceleration) >= ECO_LIMIT_MPS2 -> DriveStyle.Brisk
+            else -> DriveStyle.Eco
+        }
+    }
+
+    private fun clearAcceleration() {
+        accelerationMps2 = 0f
+        suddenUntil = 0L
+        driveStyle = DriveStyle.Eco
+    }
 
     private fun save() {
         lastSavedAt = SystemClock.elapsedRealtime()
@@ -215,6 +255,13 @@ class RideTracker(context: Context) : LocationListener {
         const val MAX_GAP_S = 5.0
         const val MAX_PLAUSIBLE_MPS = 70.0
         const val GAUGE_STEP = 60
+
+        // Speed change per second. Up to 1.5 m/s² (about 5 km/h each second) is smooth,
+        // fuel-saving riding; 2.5 m/s² (9 km/h each second) and beyond is a sudden surge
+        // or hard braking, in line with common driver-behaviour thresholds.
+        const val ECO_LIMIT_MPS2 = 1.5f
+        const val SUDDEN_MPS2 = 2.5f
+        const val SUDDEN_HOLD_MS = 2_500L
         const val GAUGE_LIMIT = 240
     }
 }

@@ -66,6 +66,7 @@ import com.odometer.app.GpsState
 import com.odometer.app.RideTracker
 import com.odometer.app.ui.theme.Amber
 import com.odometer.app.ui.theme.Chalk
+import com.odometer.app.ui.theme.EcoGreen
 import com.odometer.app.ui.theme.Ink
 import com.odometer.app.ui.theme.Muted
 import com.odometer.app.ui.theme.Panel
@@ -80,7 +81,7 @@ private val LocationPermissions = arrayOf(
     Manifest.permission.ACCESS_FINE_LOCATION,
     Manifest.permission.ACCESS_COARSE_LOCATION,
 )
-private val GoodSignal = Color(0xFF4CD080)
+private val GoodSignal = EcoGreen
 
 /**
  * The riding dashboard. Wide screens put the speedometer on the left and the odometers on
@@ -134,6 +135,7 @@ fun DashboardScreen(
         Speedometer(
             speedKmh = tracker.speedKmh,
             scaleMaxKmh = tracker.gaugeMaxKmh,
+            driveStyle = tracker.driveStyle,
             modifier = modifier.onHold {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 tracker.cycleGaugeRange()

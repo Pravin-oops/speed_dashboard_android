@@ -10,6 +10,7 @@ val Panel = Color(0xFF14161C)
 val PanelEdge = Color(0xFF262A33)
 val Amber = Color(0xFFFFB238)
 val Signal = Color(0xFFD32F2F)
+val EcoGreen = Color(0xFF4CD080)
 val Chalk = Color(0xFFF3F1EA)
 val Muted = Color(0xFF8B919E)
 

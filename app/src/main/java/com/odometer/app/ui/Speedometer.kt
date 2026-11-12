@@ -1,8 +1,10 @@
 package com.odometer.app.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -13,12 +15,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import com.odometer.app.DriveStyle
 import com.odometer.app.ui.theme.Amber
 import com.odometer.app.ui.theme.Chalk
+import com.odometer.app.ui.theme.EcoGreen
 import com.odometer.app.ui.theme.Muted
 import com.odometer.app.ui.theme.Signal
 import kotlin.math.cos
@@ -38,10 +43,39 @@ private const val SeamOffset = 8f
  * A 240° arc speedometer with the speed as a large number in the middle.
  *
  * GPS reports speed about once a second; a soft spring carries the arc and the number
- * between reports so they glide instead of ticking.
+ * between reports so they glide instead of ticking. The arc's colour follows [driveStyle].
  */
 @Composable
-fun Speedometer(speedKmh: Float, scaleMaxKmh: Int, modifier: Modifier = Modifier) {
+fun Speedometer(
+    speedKmh: Float,
+    scaleMaxKmh: Int,
+    driveStyle: DriveStyle,
+    modifier: Modifier = Modifier,
+) {
+    // The arc is a traffic light for how the rider is changing speed: green while smooth,
+    // amber when pushing, red for a sudden surge or hard braking.
+    val sudden = driveStyle == DriveStyle.SuddenAcceleration || driveStyle == DriveStyle.HardBraking
+    val arcColor = animateColorAsState(
+        targetValue = when (driveStyle) {
+            DriveStyle.Eco -> EcoGreen
+            DriveStyle.Brisk -> Amber
+            DriveStyle.SuddenAcceleration, DriveStyle.HardBraking -> Signal
+        },
+        // Warn quickly, relax back to green slowly.
+        animationSpec = tween(durationMillis = if (sudden) 150 else 600),
+        label = "arcColor",
+    )
+    val glow = animateFloatAsState(
+        targetValue = if (sudden) 1f else 0f,
+        animationSpec = tween(durationMillis = if (sudden) 150 else 600),
+        label = "glow",
+    )
+    val styleLabel = when (driveStyle) {
+        DriveStyle.Eco -> "ECO"
+        DriveStyle.Brisk -> "EASE OFF"
+        DriveStyle.SuddenAcceleration -> "SUDDEN ACCELERATION"
+        DriveStyle.HardBraking -> "HARD BRAKING"
+    }
     val speed = animateFloatAsState(
         targetValue = speedKmh,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 30f),
@@ -56,8 +90,8 @@ fun Speedometer(speedKmh: Float, scaleMaxKmh: Int, modifier: Modifier = Modifier
 
     // Everything is read inside the draw lambda, so an animation frame only redraws.
     Canvas(modifier) {
-        // A 240° arc is 2R wide and 1.5R tall; leave a little room for the rounded caps.
-        val outer = min(size.width / 2f, size.height / 1.58f)
+        // A 240° arc is 2R wide and 1.5R tall; leave room for the rounded caps and the halo.
+        val outer = min(size.width / 2f, size.height / 1.58f) * 0.95f
         val stroke = outer * 0.11f
         val radius = outer - stroke / 2f
         val center = Offset(size.width / 2f, (size.height - 1.5f * outer) / 2f + outer)
@@ -75,15 +109,29 @@ fun Speedometer(speedKmh: Float, scaleMaxKmh: Int, modifier: Modifier = Modifier
         )
 
         val fraction = (speed.value / scale.value).coerceIn(0f, 1f)
-        if (fraction > 0.002f) {
+        val moving = fraction > 0.002f
+        if (moving) {
+            val color = arcColor.value
+            val shaded = lerp(color, Color.Black, 0.45f)
             rotate(StartAngle - SeamOffset, center) {
+                if (glow.value > 0.01f) {
+                    // A soft halo behind the arc makes the red warning hard to miss.
+                    drawArc(
+                        color = color.copy(alpha = 0.28f * glow.value),
+                        startAngle = SeamOffset,
+                        sweepAngle = SweepAngle * fraction,
+                        useCenter = false,
+                        topLeft = arcTopLeft,
+                        size = arcSize,
+                        style = Stroke(stroke * 1.9f, cap = StrokeCap.Round),
+                    )
+                }
                 drawArc(
                     brush = Brush.sweepGradient(
-                        0f to Amber,
-                        SeamOffset / 360f to Amber,
-                        (SeamOffset + SweepAngle * 0.6f) / 360f to Color(0xFFFF7A2F),
-                        (SeamOffset + SweepAngle) / 360f to Signal,
-                        1f to Signal,
+                        0f to shaded,
+                        SeamOffset / 360f to shaded,
+                        (SeamOffset + SweepAngle * fraction) / 360f to color,
+                        1f to color,
                         center = center,
                     ),
                     startAngle = SeamOffset,
@@ -131,5 +179,18 @@ fun Speedometer(speedKmh: Float, scaleMaxKmh: Int, modifier: Modifier = Modifier
             TextStyle(color = Muted, fontSize = (outer * 0.1f).toSp(), fontWeight = FontWeight.Medium),
         )
         drawText(unit, topLeft = Offset(center.x - unit.size.width / 2f, center.y + outer * 0.26f))
+
+        if (moving) {
+            val style = measurer.measure(
+                styleLabel,
+                TextStyle(
+                    color = arcColor.value,
+                    fontSize = (outer * 0.075f).toSp(),
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (outer * 0.012f).toSp(),
+                ),
+            )
+            drawText(style, topLeft = Offset(center.x - style.size.width / 2f, center.y + outer * 0.42f))
+        }
     }
 }
