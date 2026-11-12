@@ -1,11 +1,15 @@
 package com.odometer.app
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Surface
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -24,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var tracker: RideTracker
     private val prefs by lazy { getSharedPreferences("display", MODE_PRIVATE) }
     private var rotationLocked by mutableStateOf(false)
+    private var splitScreen by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -42,13 +47,44 @@ class MainActivity : ComponentActivity() {
             if (rotationLocked) savedOrientation else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
 
         tracker = RideTracker(this)
+        splitScreen = isInMultiWindowMode
         setContent {
             OdometerTheme {
                 DashboardScreen(
                     tracker = tracker,
+                    compact = splitScreen,
                     rotationLocked = rotationLocked,
                     onToggleRotationLock = ::toggleRotationLock,
+                    onOpenMaps = ::openMapsAlongside,
                 )
+            }
+        }
+    }
+
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+        splitScreen = isInMultiWindowMode
+    }
+
+    /**
+     * Opens Google Maps next to the dashboard. On Android 12L and later this puts the two
+     * apps into split screen by itself; on older versions Maps opens full screen and the
+     * rider starts split screen from the recent-apps view.
+     */
+    private fun openMapsAlongside() {
+        val flags = Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK
+        val googleMaps = Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .setPackage("com.google.android.apps.maps")
+            .addFlags(flags)
+        val anyMapApp = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")).addFlags(flags)
+        try {
+            startActivity(googleMaps)
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(anyMapApp)
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(this, "No maps app is installed", Toast.LENGTH_SHORT).show()
             }
         }
     }

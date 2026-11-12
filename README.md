@@ -12,6 +12,9 @@ and trip odometers with fluid, mechanical wheel motion.
   Total, trip, max, average and moving time are saved across restarts.
 - **Sideways or upright**: the layout adapts to either, the screen stays on, system bars are
   hidden, and "Lock rotation" pins the screen so leaning the bike cannot flip it.
+- **Navigation**: the MAPS button opens Google Maps beside the dashboard in split screen
+  (Android 12L+). While sharing the screen, the app shows only the speedometer and edge glow;
+  distances keep counting.
 - **Glove-safe**: anything that changes data needs a long press (hold Trip to reset it, hold
   Total to set it to your bike's reading).
 - **Wheels**: each digit wheel is a spring that keeps its velocity between GPS fixes, follows

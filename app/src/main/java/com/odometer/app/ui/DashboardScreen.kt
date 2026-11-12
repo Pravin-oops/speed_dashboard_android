@@ -87,12 +87,17 @@ private val GoodSignal = EcoGreen
  * The riding dashboard. Wide screens put the speedometer on the left and the odometers on
  * the right; tall screens stack them. Anything that changes data needs a long press, so a
  * glove brushing the screen cannot reset a trip.
+ *
+ * When [compact] (the app is sharing the screen with a navigation app), only the speedometer
+ * and the edge glow are shown; distances keep counting in the background.
  */
 @Composable
 fun DashboardScreen(
     tracker: RideTracker,
+    compact: Boolean,
     rotationLocked: Boolean,
     onToggleRotationLock: () -> Unit,
+    onOpenMaps: () -> Unit,
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -113,22 +118,24 @@ fun DashboardScreen(
         if (!tracker.hasPermission()) permissionLauncher.launch(LocationPermissions)
     }
 
+    val onGpsClick: () -> Unit = {
+        when (tracker.gpsState) {
+            GpsState.NoPermission -> {
+                tappedRequestAt = SystemClock.elapsedRealtime()
+                permissionLauncher.launch(LocationPermissions)
+            }
+            GpsState.Disabled -> context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            else -> Unit
+        }
+    }
     val status: @Composable () -> Unit = {
         StatusRow(
             gpsState = tracker.gpsState,
             accuracyMeters = tracker.accuracyMeters,
             rotationLocked = rotationLocked,
             onToggleRotationLock = onToggleRotationLock,
-            onGpsClick = {
-                when (tracker.gpsState) {
-                    GpsState.NoPermission -> {
-                        tappedRequestAt = SystemClock.elapsedRealtime()
-                        permissionLauncher.launch(LocationPermissions)
-                    }
-                    GpsState.Disabled -> context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                    else -> Unit
-                }
-            },
+            onOpenMaps = onOpenMaps,
+            onGpsClick = onGpsClick,
         )
     }
     val speedometer: @Composable (Modifier) -> Unit = { modifier ->
@@ -184,7 +191,27 @@ fun DashboardScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        BoxWithConstraints(
+        if (compact) {
+            // Sharing the screen with a map: the dial takes the whole window. The GPS line
+            // only appears when something is wrong, since a 0 would otherwise be misleading.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(Ink, Color(0xFF12141A), Ink)))
+                    .safeDrawingPadding()
+                    .padding(8.dp),
+            ) {
+                speedometer(Modifier.fillMaxSize())
+                if (tracker.gpsState != GpsState.Fix) {
+                    GpsPill(
+                        gpsState = tracker.gpsState,
+                        accuracyMeters = tracker.accuracyMeters,
+                        onClick = onGpsClick,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                    )
+                }
+            }
+        } else BoxWithConstraints(
             Modifier
                 .fillMaxSize()
                 .background(Brush.verticalGradient(listOf(Ink, Color(0xFF12141A), Ink)))
@@ -244,6 +271,7 @@ private fun StatusRow(
     accuracyMeters: Float,
     rotationLocked: Boolean,
     onToggleRotationLock: () -> Unit,
+    onOpenMaps: () -> Unit,
     onGpsClick: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -253,6 +281,33 @@ private fun StatusRow(
             value = context.clockText()
         }
     }
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        GpsPill(gpsState, accuracyMeters, onGpsClick, Modifier.weight(1f))
+        // While GPS needs attention, its message gets the room instead of the clock.
+        if (gpsState == GpsState.Fix) {
+            Text(text = clock, color = Chalk, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        }
+        Chip(text = "MAPS", color = Chalk, onClick = onOpenMaps)
+        val lockColor by animateColorAsState(if (rotationLocked) Amber else Muted, label = "rotationChip")
+        Chip(
+            text = if (rotationLocked) "ROTATION LOCKED" else "LOCK ROTATION",
+            color = lockColor,
+            onClick = onToggleRotationLock,
+        )
+    }
+}
+
+@Composable
+private fun GpsPill(
+    gpsState: GpsState,
+    accuracyMeters: Float,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val (text, color) = when (gpsState) {
         GpsState.NoPermission -> "TAP TO ALLOW LOCATION" to Signal
         GpsState.Disabled -> "GPS IS OFF · TAP TO TURN ON" to Signal
@@ -261,52 +316,41 @@ private fun StatusRow(
     }
     val lamp by animateColorAsState(color, label = "gpsLamp")
     val actionable = gpsState == GpsState.NoPermission || gpsState == GpsState.Disabled
-
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = actionable, onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(12.dp))
-                .clickable(enabled = actionable, onClick = onGpsClick)
-                .padding(vertical = 10.dp, horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(8.dp).clip(CircleShape).background(lamp))
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = text,
-                color = lamp,
-                fontSize = 12.sp,
-                letterSpacing = 1.5.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Box(Modifier.size(8.dp).clip(CircleShape).background(lamp))
+        Spacer(Modifier.width(8.dp))
         Text(
-            text = clock,
-            color = Chalk,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
-        val chipColor by animateColorAsState(if (rotationLocked) Amber else Muted, label = "rotationChip")
-        Text(
-            text = if (rotationLocked) "ROTATION LOCKED" else "LOCK ROTATION",
-            color = chipColor,
-            fontSize = 11.sp,
-            letterSpacing = 1.sp,
-            fontWeight = FontWeight.Medium,
+            text = text,
+            color = lamp,
+            fontSize = 12.sp,
+            letterSpacing = 1.5.sp,
             maxLines = 1,
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .border(1.dp, chipColor.copy(alpha = 0.6f), RoundedCornerShape(50))
-                .clickable(onClick = onToggleRotationLock)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+            overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+@Composable
+private fun Chip(text: String, color: Color, onClick: () -> Unit) {
+    Text(
+        text = text,
+        color = color,
+        fontSize = 11.sp,
+        letterSpacing = 1.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    )
 }
 
 @Composable
