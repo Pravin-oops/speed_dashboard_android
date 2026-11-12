@@ -183,37 +183,47 @@ fun DashboardScreen(
         }
     }
 
-    BoxWithConstraints(
-        Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Ink, Color(0xFF12141A), Ink)))
-            .safeDrawingPadding()
-            .padding(12.dp),
-    ) {
-        if (maxWidth > maxHeight) {
-            // Sideways on the handlebar: size the wheels from the short edge so both
-            // odometers always fit without scrolling.
-            val totalDigit = min(44.dp, maxHeight * 0.105f)
-            val tripDigit = min(36.dp, maxHeight * 0.085f)
-            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                speedometer(Modifier.weight(1f).fillMaxHeight())
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.SpaceBetween,
-                ) {
+    Box(Modifier.fillMaxSize()) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(Ink, Color(0xFF12141A), Ink)))
+                .safeDrawingPadding()
+                .padding(12.dp),
+        ) {
+            if (maxWidth > maxHeight) {
+                // Sideways on the handlebar: size the wheels from the short edge so both
+                // odometers always fit without scrolling.
+                val totalDigit = min(44.dp, maxHeight * 0.105f)
+                val tripDigit = min(36.dp, maxHeight * 0.085f)
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    speedometer(Modifier.weight(1f).fillMaxHeight())
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        status()
+                        total(totalDigit)
+                        trip(tripDigit)
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     status()
-                    total(totalDigit)
-                    trip(tripDigit)
+                    speedometer(Modifier.weight(1f).fillMaxWidth())
+                    total(48.dp)
+                    trip(38.dp)
                 }
             }
-        } else {
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                status()
-                speedometer(Modifier.weight(1f).fillMaxWidth())
-                total(48.dp)
-                trip(38.dp)
-            }
         }
+
+        // Over everything and out to the physical edges of the screen, so the riding-style
+        // colour is visible in peripheral vision.
+        EdgeGlow(
+            driveStyle = tracker.driveStyle,
+            moving = tracker.speedKmh > 0f,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 
     if (editingTotal) {

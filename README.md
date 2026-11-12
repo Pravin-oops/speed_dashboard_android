@@ -6,7 +6,8 @@ and trip odometers with fluid, mechanical wheel motion.
 - **Speed** comes from the GPS receiver's own speed measurement, shown on a 240° dial whose
   range grows from 60 to 240 km/h as you go faster (hold the dial to change it by hand).
 - **Riding style**: the dial is green while speed changes gently (eco), amber when pushing, and
-  red with a warning for sudden acceleration or hard braking.
+  red with a warning for sudden acceleration or hard braking. The whole rim of the screen glows
+  in the same colour (red floods further in and flashes), so it reads in peripheral vision.
 - **Distance** is that speed integrated over time, so the reading does not creep while parked.
   Total, trip, max, average and moving time are saved across restarts.
 - **Sideways or upright**: the layout adapts to either, the screen stays on, system bars are
