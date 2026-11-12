@@ -77,6 +77,13 @@ object OdometerDefaults {
     val TrackingSpring: AnimationSpec<Float> =
         spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
 
+    /**
+     * Very soft, critically damped spring for readings that arrive about once a second
+     * (GPS). It is still travelling when the next fix lands, so the wheels never pause.
+     */
+    val GlideSpring: AnimationSpec<Float> =
+        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 20f)
+
     fun colors(
         housing: Color = Color(0xFF07080B),
         wheel: Color = Color(0xFF1C1F26),
