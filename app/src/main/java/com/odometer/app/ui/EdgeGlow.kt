@@ -84,7 +84,7 @@ fun EdgeGlow(driveStyle: DriveStyle, moving: Boolean, modifier: Modifier = Modif
 
     // The pulse only exists while there is something to warn about, so steady eco riding
     // costs no animation frames at all.
-    val pulse: State<Float>? = if (moving && driveStyle != DriveStyle.Eco) {
+    val pulse: State<Float>? = if (moving && driveStyle != DriveStyle.Eco && !LocalBatterySaver.current) {
         key(sudden) {
             rememberInfiniteTransition(label = "glowPulse").animateFloat(
                 initialValue = 1f,

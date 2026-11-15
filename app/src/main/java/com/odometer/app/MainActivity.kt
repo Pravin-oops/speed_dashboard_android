@@ -8,19 +8,20 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Surface
-import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.odometer.app.ui.DashboardScreen
+import com.odometer.app.ui.LocalBatterySaver
+import com.odometer.app.ui.RideApp
 import com.odometer.app.ui.theme.OdometerTheme
 
 class MainActivity : ComponentActivity() {
@@ -29,6 +30,7 @@ class MainActivity : ComponentActivity() {
     private val prefs by lazy { getSharedPreferences("display", MODE_PRIVATE) }
     private var rotationLocked by mutableStateOf(false)
     private var splitScreen by mutableStateOf(false)
+    private var batterySaver by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -37,28 +39,65 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
 
-        // A dashboard must never dim or sleep while it is on the handlebar.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
         // Restore a locked orientation so the app opens the way the phone is mounted.
         val savedOrientation = prefs.getInt(KEY_ORIENTATION, NOT_LOCKED)
         rotationLocked = savedOrientation != NOT_LOCKED
         requestedOrientation =
             if (rotationLocked) savedOrientation else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
 
-        tracker = RideTracker(this)
+        val store = TripStore(this)
+        tracker = RideTracker(this, store)
         splitScreen = isInMultiWindowMode
+        batterySaver = prefs.getBoolean(KEY_BATTERY_SAVER, false)
+        applyRefreshRate()
         setContent {
             OdometerTheme {
-                DashboardScreen(
-                    tracker = tracker,
-                    compact = splitScreen,
-                    rotationLocked = rotationLocked,
-                    onToggleRotationLock = ::toggleRotationLock,
-                    onOpenMaps = ::openMapsAlongside,
-                )
+                CompositionLocalProvider(LocalBatterySaver provides batterySaver) {
+                    RideApp(
+                        tracker = tracker,
+                        store = store,
+                        splitScreen = splitScreen,
+                        rotationLocked = rotationLocked,
+                        batterySaver = batterySaver,
+                        onToggleRotationLock = ::toggleRotationLock,
+                        onToggleBatterySaver = ::toggleBatterySaver,
+                        onOpenMaps = ::openMapsAlongside,
+                    )
+                }
             }
         }
+    }
+
+    private fun toggleBatterySaver() {
+        batterySaver = !batterySaver
+        prefs.edit().putBoolean(KEY_BATTERY_SAVER, batterySaver).apply()
+        applyRefreshRate()
+    }
+
+    /**
+     * In battery saver, asks the screen for its slowest refresh rate that is still at least
+     * 30 Hz. A panel can only run at the rates it was built with: one that offers 30 Hz gets
+     * 30, and one whose slowest mode is 60 Hz stays at 60.
+     */
+    private fun applyRefreshRate() {
+        val attributes = window.attributes
+        if (batterySaver) {
+            @Suppress("DEPRECATION")
+            val screen = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
+            val now = screen?.mode
+            val slowest = screen?.supportedModes
+                ?.filter {
+                    it.physicalWidth == now?.physicalWidth && it.physicalHeight == now.physicalHeight &&
+                        it.refreshRate >= SAVER_HZ - 0.5f
+                }
+                ?.minByOrNull { it.refreshRate }
+            attributes.preferredDisplayModeId = slowest?.modeId ?: 0
+            attributes.preferredRefreshRate = SAVER_HZ
+        } else {
+            attributes.preferredDisplayModeId = 0
+            attributes.preferredRefreshRate = 0f
+        }
+        window.attributes = attributes
     }
 
     override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
@@ -152,6 +191,8 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val KEY_ORIENTATION = "locked_orientation"
+        const val KEY_BATTERY_SAVER = "battery_saver"
+        const val SAVER_HZ = 30f
         const val NOT_LOCKED = Int.MIN_VALUE
     }
 }

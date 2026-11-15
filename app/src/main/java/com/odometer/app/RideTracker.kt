@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.OnNmeaMessageListener
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -27,13 +29,17 @@ enum class GpsState { NoPermission, Disabled, Searching, Fix }
 enum class DriveStyle { Eco, Brisk, SuddenAcceleration, HardBraking }
 
 /**
- * Turns GPS fixes into a live speed and running distances.
+ * Turns GPS fixes into a live speed, an elevation and the running figures of a trip.
  *
  * Speed comes from the receiver's own Doppler measurement when the fix carries one, which is
  * far steadier than differencing positions. Distance is that speed integrated over time, so a
- * phone sitting still does not creep forward from position jitter. Totals survive restarts.
+ * phone sitting still does not creep forward from position jitter.
+ *
+ * A trip runs from [startTrip] to [finishTrip]. While it runs, every good fix is appended to
+ * the trip's speed log in [store]; the trip's state is persisted, so it carries on if the
+ * app is restarted mid-ride.
  */
-class RideTracker(context: Context) : LocationListener {
+class RideTracker(context: Context, private val store: TripStore) : LocationListener {
 
     private val appContext = context.applicationContext
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
@@ -42,19 +48,29 @@ class RideTracker(context: Context) : LocationListener {
 
     var speedKmh by mutableFloatStateOf(0f)
         private set
-    var maxKmh by mutableFloatStateOf(prefs.getFloat(KEY_MAX, 0f))
-        private set
     var totalKm by mutableDoubleStateOf(prefs.getDouble(KEY_TOTAL))
-        private set
-    var tripKm by mutableDoubleStateOf(prefs.getDouble(KEY_TRIP))
-        private set
-    var movingMillis by mutableLongStateOf(prefs.getLong(KEY_MOVING, 0L))
         private set
     var gaugeMaxKmh by mutableIntStateOf(prefs.getInt(KEY_GAUGE, GAUGE_STEP))
         private set
     var gpsState by mutableStateOf(if (hasPermission()) GpsState.Searching else GpsState.NoPermission)
         private set
     var accuracyMeters by mutableFloatStateOf(0f)
+        private set
+
+    /** Height above sea level, smoothed. NaN until the receiver has reported one. */
+    var altitudeMeters by mutableFloatStateOf(Float.NaN)
+        private set
+
+    /** When the trip being ridden started, in epoch milliseconds; 0 while no trip is running. */
+    var tripStartedAt by mutableLongStateOf(prefs.getLong(KEY_TRIP_START, 0L))
+        private set
+    val tripActive: Boolean get() = tripStartedAt != 0L
+
+    var tripKm by mutableDoubleStateOf(prefs.getDouble(KEY_TRIP))
+        private set
+    var movingMillis by mutableLongStateOf(prefs.getLong(KEY_MOVING, 0L))
+        private set
+    var maxKmh by mutableFloatStateOf(prefs.getFloat(KEY_MAX, 0f))
         private set
 
     /** Change in speed between the last two fixes, in m/s². Negative while slowing down. */
@@ -73,6 +89,12 @@ class RideTracker(context: Context) : LocationListener {
     private var lastSavedAt = 0L
     private var suddenUntil = 0L
     private var suddenWasBraking = false
+    private var recorder: TripRecorder? = null
+
+    // The receiver's own sea-level altitude, read from its NMEA stream.
+    private var seaLevelAltitude = 0f
+    private var seaLevelAltitudeAt = NEVER
+    private val nmeaListener = OnNmeaMessageListener { message, _ -> readSeaLevelAltitude(message) }
 
     private val signalLost = Runnable {
         speedKmh = 0f
@@ -104,12 +126,19 @@ class RideTracker(context: Context) : LocationListener {
         locationManager.requestLocationUpdates(
             LocationManager.GPS_PROVIDER, UPDATE_INTERVAL_MS, 0f, this, Looper.getMainLooper(),
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            locationManager.addNmeaListener(appContext.mainExecutor, nmeaListener)
+        } else {
+            @Suppress("DEPRECATION")
+            locationManager.addNmeaListener(nmeaListener, handler)
+        }
         listening = true
     }
 
     fun stop() {
         if (listening) {
             locationManager.removeUpdates(this)
+            locationManager.removeNmeaListener(nmeaListener)
             listening = false
         }
         handler.removeCallbacks(signalLost)
@@ -118,19 +147,46 @@ class RideTracker(context: Context) : LocationListener {
         speedKmh = 0f
         clearAcceleration()
         if (gpsState == GpsState.Fix) gpsState = GpsState.Searching
+        // Reopened on the next fix; closing here leaves nothing buffered if the app is killed.
+        recorder?.close()
+        recorder = null
         save()
     }
 
-    fun resetTrip() {
+    fun startTrip() {
+        if (tripActive) return
         tripKm = 0.0
         movingMillis = 0L
         maxKmh = 0f
+        tripStartedAt = System.currentTimeMillis()
         save()
     }
 
-    fun setTotal(km: Double) {
-        totalKm = km.coerceIn(0.0, 999_999.9)
+    /**
+     * Ends the running trip and files it in the history. Returns the saved trip, or null if
+     * it covered too little ground to be worth keeping (a start pressed by mistake).
+     */
+    fun finishTrip(): TripSummary? {
+        if (!tripActive) return null
+        recorder?.close()
+        recorder = null
+        val trip = TripSummary(
+            startedAt = tripStartedAt,
+            endedAt = System.currentTimeMillis(),
+            distanceKm = tripKm,
+            movingMillis = movingMillis,
+            maxKmh = maxKmh,
+            averageKmh = averageKmh,
+        )
+        tripStartedAt = 0L
         save()
+        return if (trip.distanceKm >= MIN_TRIP_KM) {
+            store.add(trip)
+            trip
+        } else {
+            store.discardSamples(trip.id)
+            null
+        }
     }
 
     /** Steps the dial through its ranges: 60, 120, 180, 240 km/h. */
@@ -170,8 +226,10 @@ class RideTracker(context: Context) : LocationListener {
             }
             if (meters > 0.0) {
                 totalKm += meters / 1000.0
-                tripKm += meters / 1000.0
-                if (seconds <= MAX_GAP_S) movingMillis += (seconds * 1000).toLong()
+                if (tripActive) {
+                    tripKm += meters / 1000.0
+                    if (seconds <= MAX_GAP_S) movingMillis += (seconds * 1000).toLong()
+                }
             }
         }
         // Acceleration is only meaningful between two good fixes a moment apart.
@@ -181,11 +239,19 @@ class RideTracker(context: Context) : LocationListener {
         if (reliable) {
             lastFix = location
             lastSpeedMps = speedMps
+            updateAltitude(location)
         }
 
         speedKmh = speedMps * 3.6f
-        maxKmh = max(maxKmh, speedKmh)
         while (speedKmh > gaugeMaxKmh * 0.92f && gaugeMaxKmh < GAUGE_LIMIT) gaugeMaxKmh += GAUGE_STEP
+
+        if (tripActive) {
+            maxKmh = max(maxKmh, speedKmh)
+            if (reliable) {
+                val log = recorder ?: store.openRecorder(tripStartedAt).also { recorder = it }
+                log.add(((System.currentTimeMillis() - tripStartedAt) / 1000L).toInt(), speedKmh, altitudeMeters)
+            }
+        }
 
         val now = SystemClock.elapsedRealtime()
         if (now - lastSavedAt > SAVE_INTERVAL_MS) save()
@@ -204,6 +270,42 @@ class RideTracker(context: Context) : LocationListener {
 
     @Deprecated("Deprecated in Java")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+
+    /**
+     * A fix's own altitude is measured from the GPS ellipsoid, which sits up to a hundred
+     * metres off sea level depending on where you are. The receiver's GGA sentence carries
+     * the sea-level figure, so that is preferred whenever it is fresh.
+     */
+    private fun updateAltitude(location: Location) {
+        val nmeaFresh = seaLevelAltitudeAt != NEVER &&
+            SystemClock.elapsedRealtime() - seaLevelAltitudeAt < NMEA_FRESH_MS
+        val altitude = when {
+            nmeaFresh -> seaLevelAltitude
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && location.hasMslAltitude() ->
+                location.mslAltitudeMeters.toFloat()
+            location.hasAltitude() -> location.altitude.toFloat()
+            else -> return
+        }
+        // GPS height wanders by several metres between fixes; follow it gently.
+        altitudeMeters = if (altitudeMeters.isNaN()) {
+            altitude
+        } else {
+            altitudeMeters + ALTITUDE_SMOOTHING * (altitude - altitudeMeters)
+        }
+    }
+
+    /** `$GPGGA,time,lat,N,lon,E,quality,satellites,hdop,altitude,M,...` */
+    private fun readSeaLevelAltitude(message: String) {
+        if (!message.startsWith("GGA", startIndex = 3)) return
+        val fields = message.split(',')
+        if (fields.size < 11) return
+        val hasFix = fields[6].isNotEmpty() && fields[6] != "0"
+        val altitude = fields[9].toFloatOrNull()
+        if (hasFix && altitude != null) {
+            seaLevelAltitude = altitude
+            seaLevelAltitudeAt = SystemClock.elapsedRealtime()
+        }
+    }
 
     private fun updateDriveStyle(acceleration: Float) {
         accelerationMps2 = acceleration
@@ -228,8 +330,10 @@ class RideTracker(context: Context) : LocationListener {
 
     private fun save() {
         lastSavedAt = SystemClock.elapsedRealtime()
+        recorder?.flush()
         prefs.edit()
             .putLong(KEY_TOTAL, totalKm.toRawBits())
+            .putLong(KEY_TRIP_START, tripStartedAt)
             .putLong(KEY_TRIP, tripKm.toRawBits())
             .putLong(KEY_MOVING, movingMillis)
             .putFloat(KEY_MAX, maxKmh)
@@ -242,6 +346,7 @@ class RideTracker(context: Context) : LocationListener {
 
     private companion object {
         const val KEY_TOTAL = "total_km"
+        const val KEY_TRIP_START = "trip_started_at"
         const val KEY_TRIP = "trip_km"
         const val KEY_MOVING = "moving_ms"
         const val KEY_MAX = "max_kmh"
@@ -250,10 +355,14 @@ class RideTracker(context: Context) : LocationListener {
         const val UPDATE_INTERVAL_MS = 1_000L
         const val SIGNAL_TIMEOUT_MS = 4_000L
         const val SAVE_INTERVAL_MS = 5_000L
+        const val NMEA_FRESH_MS = 5_000L
+        const val NEVER = -1L
         const val MAX_ACCURACY_M = 30f
         const val STANDSTILL_MPS = 0.5f
         const val MAX_GAP_S = 5.0
         const val MAX_PLAUSIBLE_MPS = 70.0
+        const val ALTITUDE_SMOOTHING = 0.25f
+        const val MIN_TRIP_KM = 0.05
         const val GAUGE_STEP = 60
 
         // Speed change per second. Up to 1.5 m/s² (about 5 km/h each second) is smooth,

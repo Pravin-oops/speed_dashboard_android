@@ -14,6 +14,9 @@ val EcoGreen = Color(0xFF4CD080)
 val Chalk = Color(0xFFF3F1EA)
 val Muted = Color(0xFF8B919E)
 
+/** Small print that has to stay readable in direct sunlight: scales, units, captions. */
+val Label = Color(0xFFC9CED9)
+
 private val OdometerColorScheme = darkColorScheme(
     primary = Amber,
     onPrimary = Color(0xFF231600),

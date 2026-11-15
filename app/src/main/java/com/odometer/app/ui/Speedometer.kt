@@ -1,12 +1,18 @@
 package com.odometer.app.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -24,7 +30,7 @@ import com.odometer.app.DriveStyle
 import com.odometer.app.ui.theme.Amber
 import com.odometer.app.ui.theme.Chalk
 import com.odometer.app.ui.theme.EcoGreen
-import com.odometer.app.ui.theme.Muted
+import com.odometer.app.ui.theme.Label
 import com.odometer.app.ui.theme.Signal
 import kotlin.math.cos
 import kotlin.math.min
@@ -39,11 +45,19 @@ private const val Divisions = 12
 // gradient sits just before the arc's rounded start cap instead of inside it.
 private const val SeamOffset = 8f
 
+// One pulse every period: it travels for the first share of it and rests for the remainder.
+private const val PulsePeriodMillis = 2_600
+private const val PulseTravelShare = 0.42f
+
+/** Length of the bright front of the pulse, in degrees of arc. */
+private const val PulseTailAngle = 50f
+
 /**
  * A 240° arc speedometer with the speed as a large number in the middle.
  *
  * GPS reports speed about once a second; a soft spring carries the arc and the number
- * between reports so they glide instead of ticking. The arc's colour follows [driveStyle].
+ * between reports so they glide instead of ticking. The arc's colour follows [driveStyle],
+ * and while moving a pulse of light keeps running up the filled part of the arc.
  */
 @Composable
 fun Speedometer(
@@ -86,6 +100,19 @@ fun Speedometer(
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 80f),
         label = "scale",
     )
+    // A pulse of light runs up the bar from 0 to the current speed, rests, and runs again,
+    // so the bar looks alive even at a steady speed. It only exists while moving, so a
+    // parked bike costs no animation frames.
+    val pulse: State<Float>? = if (speedKmh > 0f && !LocalBatterySaver.current) {
+        rememberInfiniteTransition(label = "fillPulse").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(PulsePeriodMillis, easing = LinearEasing)),
+            label = "fillPulsePhase",
+        )
+    } else {
+        null
+    }
     val measurer = rememberTextMeasurer(cacheSize = 32)
 
     // Everything is read inside the draw lambda, so an animation frame only redraws.
@@ -101,7 +128,7 @@ fun Speedometer(
         // The empty track is a channel of clear glass, brighter where the light hits the top.
         drawArc(
             brush = Brush.verticalGradient(
-                listOf(Color.White.copy(alpha = 0.17f), Color.White.copy(alpha = 0.06f)),
+                listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.16f)),
                 startY = center.y - outer,
                 endY = center.y + outer * 0.5f,
             ),
@@ -158,19 +185,49 @@ fun Speedometer(
                     size = Size(glossRadius * 2f, glossRadius * 2f),
                     style = Stroke(stroke * 0.14f, cap = StrokeCap.Round),
                 )
+
+                // The pulse: the bar brightens from its start up to a travelling front, which
+                // eases into the current speed and fades as it arrives. The rest of each
+                // period is the pause before the next one.
+                val travel = (pulse?.value ?: 1f) / PulseTravelShare
+                if (travel < 1f) {
+                    val front = SweepAngle * fraction * FastOutSlowInEasing.transform(travel)
+                    if (front > 1f) {
+                        // Fades in as it sets off and out as it arrives.
+                        val strength = minOf(travel / 0.15f, (1f - travel) / 0.3f, 1f)
+                        val tail = (front - PulseTailAngle).coerceAtLeast(0f)
+                        val bright = Color.White.copy(alpha = 0.6f * strength)
+                        drawArc(
+                            brush = Brush.sweepGradient(
+                                0f to Color.Transparent,
+                                SeamOffset / 360f to Color.Transparent,
+                                (SeamOffset + tail) / 360f to Color.White.copy(alpha = 0.1f * strength),
+                                (SeamOffset + front) / 360f to bright,
+                                1f to bright,
+                                center = center,
+                            ),
+                            startAngle = SeamOffset,
+                            sweepAngle = front,
+                            useCenter = false,
+                            topLeft = arcTopLeft,
+                            size = arcSize,
+                            style = Stroke(stroke, cap = StrokeCap.Round),
+                        )
+                    }
+                }
             }
         }
 
         // Tick marks and scale labels inside the arc.
         val tickOuter = radius - stroke / 2f - outer * 0.035f
-        val labelStyle = TextStyle(color = Muted, fontSize = (outer * 0.085f).toSp(), fontWeight = FontWeight.Medium)
+        val labelStyle = TextStyle(color = Label, fontSize = (outer * 0.085f).toSp(), fontWeight = FontWeight.Medium)
         for (i in 0..Divisions) {
             val major = i % 2 == 0
             val angle = Math.toRadians((StartAngle + SweepAngle * i / Divisions).toDouble())
             val direction = Offset(cos(angle).toFloat(), sin(angle).toFloat())
             val length = outer * if (major) 0.07f else 0.035f
             drawLine(
-                color = if (major) Muted else Muted.copy(alpha = 0.5f),
+                color = if (major) Label else Label.copy(alpha = 0.7f),
                 start = center + direction * tickOuter,
                 end = center + direction * (tickOuter - length),
                 strokeWidth = outer * if (major) 0.012f else 0.008f,
@@ -193,7 +250,7 @@ fun Speedometer(
         )
         val unit = measurer.measure(
             "km/h",
-            TextStyle(color = Muted, fontSize = (outer * 0.1f).toSp(), fontWeight = FontWeight.Medium),
+            TextStyle(color = Label, fontSize = (outer * 0.1f).toSp(), fontWeight = FontWeight.Medium),
         )
         drawText(unit, topLeft = Offset(center.x - unit.size.width / 2f, center.y + outer * 0.26f))
 

@@ -16,7 +16,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Odometer">
         <!-- Rotation is handled by Compose, so turning the phone never restarts the screen
-             or interrupts the wheels mid-roll. -->
+             or interrupts the dial mid-sweep. -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density"

@@ -1,65 +1,32 @@
 package com.odometer.app.ui
 
-import android.Manifest
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.SystemClock
-import android.provider.Settings
-import android.text.format.DateFormat
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.LocalIndication
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
@@ -68,74 +35,32 @@ import com.odometer.app.RideTracker
 import com.odometer.app.ui.theme.Amber
 import com.odometer.app.ui.theme.Chalk
 import com.odometer.app.ui.theme.EcoGreen
-import com.odometer.app.ui.theme.Muted
-import com.odometer.app.ui.theme.Signal
+import com.odometer.app.ui.theme.Label
 import kotlinx.coroutines.delay
-import java.util.Date
-import java.util.Locale
 import kotlin.math.roundToInt
 
-private val LocationPermissions = arrayOf(
-    Manifest.permission.ACCESS_FINE_LOCATION,
-    Manifest.permission.ACCESS_COARSE_LOCATION,
-)
-private val GoodSignal = EcoGreen
-
 /**
- * The riding dashboard. Wide screens put the speedometer on the left and the odometers on
- * the right; tall screens stack them. Anything that changes data needs a long press, so a
- * glove brushing the screen cannot reset a trip.
+ * The riding dashboard: the speedometer over the whole screen, with the elevation scope in
+ * the top-left corner, the status controls in the top-right and the trip's running figures
+ * along the bottom. Ending the trip needs a long press, so a glove brushing the screen
+ * cannot do it.
  *
  * When [compact] (the app is sharing the screen with a navigation app), only the speedometer
- * and the edge glow are shown; distances keep counting in the background.
+ * and the edge glow are shown; the trip keeps recording in the background.
  */
 @Composable
 fun DashboardScreen(
     tracker: RideTracker,
     compact: Boolean,
     rotationLocked: Boolean,
+    batterySaver: Boolean,
     onToggleRotationLock: () -> Unit,
+    onToggleBatterySaver: () -> Unit,
     onOpenMaps: () -> Unit,
+    onGpsClick: () -> Unit,
+    onEndTrip: () -> Unit,
 ) {
-    val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    var editingTotal by remember { mutableStateOf(false) }
-
-    // If the system answers a tapped request instantly, it refused to show its dialog
-    // (permission permanently denied), so the only way forward is the app's settings page.
-    var tappedRequestAt by remember { mutableLongStateOf(0L) }
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
-        tracker.start()
-        val answeredInstantly = SystemClock.elapsedRealtime() - tappedRequestAt < 400L
-        if (!tracker.hasPermission() && tappedRequestAt != 0L && answeredInstantly) context.openAppSettings()
-        tappedRequestAt = 0L
-    }
-    LaunchedEffect(Unit) {
-        if (!tracker.hasPermission()) permissionLauncher.launch(LocationPermissions)
-    }
-
-    val onGpsClick: () -> Unit = {
-        when (tracker.gpsState) {
-            GpsState.NoPermission -> {
-                tappedRequestAt = SystemClock.elapsedRealtime()
-                permissionLauncher.launch(LocationPermissions)
-            }
-            GpsState.Disabled -> context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-            else -> Unit
-        }
-    }
-    val status: @Composable () -> Unit = {
-        StatusRow(
-            gpsState = tracker.gpsState,
-            accuracyMeters = tracker.accuracyMeters,
-            rotationLocked = rotationLocked,
-            onToggleRotationLock = onToggleRotationLock,
-            onOpenMaps = onOpenMaps,
-            onGpsClick = onGpsClick,
-        )
-    }
     val speedometer: @Composable (Modifier) -> Unit = { modifier ->
         Speedometer(
             speedKmh = tracker.speedKmh,
@@ -147,51 +72,8 @@ fun DashboardScreen(
             },
         )
     }
-    val total: @Composable (Dp) -> Unit = { digitWidth ->
-        Section(onHold = {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            editingTotal = true
-        }) {
-            SectionHeader("TOTAL · KM", "HOLD TO SET")
-            Odometer(
-                value = tracker.totalKm,
-                modifier = Modifier.fillMaxWidth(),
-                integerDigits = 6,
-                fractionDigits = 1,
-                maxDigitWidth = digitWidth,
-                animationSpec = OdometerDefaults.GlideSpring,
-                staggerMillis = 0L,
-            )
-        }
-    }
-    val trip: @Composable (Dp) -> Unit = { digitWidth ->
-        Section(onHold = {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            tracker.resetTrip()
-        }) {
-            SectionHeader("TRIP · KM", "HOLD TO RESET")
-            Odometer(
-                value = tracker.tripKm,
-                modifier = Modifier.fillMaxWidth(),
-                integerDigits = 4,
-                fractionDigits = 1,
-                maxDigitWidth = digitWidth,
-                animationSpec = OdometerDefaults.GlideSpring,
-                staggerMillis = 0L,
-            )
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth()) {
-                Stat("MAX", "${tracker.maxKmh.roundToInt()}", "km/h", Modifier.weight(1f))
-                Stat("AVG", "${tracker.averageKmh.roundToInt()}", "km/h", Modifier.weight(1f))
-                Stat("MOVING", formatDuration(tracker.movingMillis), "h:mm", Modifier.weight(1f))
-            }
-        }
-    }
 
     Box(Modifier.fillMaxSize()) {
-        // Pools of soft colour for the glass panes above to pick up.
-        AmbientBackdrop(Modifier.fillMaxSize())
-
         if (compact) {
             // Sharing the screen with a map: the dial takes the whole window. The GPS line
             // only appears when something is wrong, since a 0 would otherwise be misleading.
@@ -217,30 +99,52 @@ fun DashboardScreen(
                 .safeDrawingPadding()
                 .padding(12.dp),
         ) {
-            if (maxWidth > maxHeight) {
-                // Sideways on the handlebar: size the wheels from the short edge so both
-                // odometers always fit without scrolling.
-                val totalDigit = min(44.dp, maxHeight * 0.105f)
-                val tripDigit = min(36.dp, maxHeight * 0.085f)
-                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    speedometer(Modifier.weight(1f).fillMaxHeight())
-                    Column(
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        verticalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        status()
-                        total(totalDigit)
-                        trip(tripDigit)
-                    }
-                }
-            } else {
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    status()
-                    speedometer(Modifier.weight(1f).fillMaxWidth())
-                    total(48.dp)
-                    trip(38.dp)
-                }
+            // Sideways on the handlebar the dial is as tall as the screen, which leaves the
+            // corners either side of it free. Upright it is as wide as the screen, with
+            // room above and below instead.
+            val wide = maxWidth > maxHeight
+            val statusHeight = 44.dp
+            val tripBarHeight = 52.dp
+
+            speedometer(
+                Modifier
+                    .fillMaxSize()
+                    // Sideways, just enough to keep the top of the arc clear of the status row.
+                    .padding(top = if (wide) 20.dp else statusHeight, bottom = if (wide) 0.dp else tripBarHeight),
+            )
+            ElevationScope(
+                altitudeMeters = tracker.altitudeMeters,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = if (wide) 0.dp else statusHeight + 8.dp)
+                    .size(if (wide) min(maxHeight * 0.45f, maxWidth * 0.2f) else maxWidth * 0.34f),
+            )
+            Column(Modifier.align(Alignment.TopEnd), horizontalAlignment = Alignment.End) {
+                StatusRow(
+                    gpsState = tracker.gpsState,
+                    accuracyMeters = tracker.accuracyMeters,
+                    rotationLocked = rotationLocked,
+                    fill = !wide,
+                    onToggleRotationLock = onToggleRotationLock,
+                    onOpenMaps = onOpenMaps,
+                    onGpsClick = onGpsClick,
+                    modifier = Modifier.heightIn(min = statusHeight),
+                )
+                // Under the status row, in the corner the dial leaves free either way up.
+                val saverColor by animateColorAsState(if (batterySaver) EcoGreen else Label, label = "saverChip")
+                GlassChip(
+                    text = if (batterySaver) "BATTERY SAVER ON" else "BATTERY SAVER",
+                    color = saverColor,
+                    onClick = onToggleBatterySaver,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
+            TripBar(
+                tracker = tracker,
+                spread = wide,
+                onEndTrip = onEndTrip,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
 
         // Over everything and out to the physical edges of the screen, so the riding-style
@@ -251,27 +155,19 @@ fun DashboardScreen(
             modifier = Modifier.fillMaxSize(),
         )
     }
-
-    if (editingTotal) {
-        SetOdometerDialog(
-            currentKm = tracker.totalKm,
-            onDismiss = { editingTotal = false },
-            onConfirm = { km ->
-                tracker.setTotal(km)
-                editingTotal = false
-            },
-        )
-    }
 }
 
+/** GPS, the clock, MAPS and the rotation lock. [fill] stretches it across the screen. */
 @Composable
 private fun StatusRow(
     gpsState: GpsState,
     accuracyMeters: Float,
     rotationLocked: Boolean,
+    fill: Boolean,
     onToggleRotationLock: () -> Unit,
     onOpenMaps: () -> Unit,
     onGpsClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val clock by produceState(initialValue = context.clockText()) {
@@ -281,158 +177,41 @@ private fun StatusRow(
         }
     }
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+        modifier = if (fill) modifier.fillMaxWidth() else modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        GpsPill(gpsState, accuracyMeters, onGpsClick, Modifier.weight(1f))
+        GpsPill(gpsState, accuracyMeters, onGpsClick, if (fill) Modifier.weight(1f) else Modifier)
         // While GPS needs attention, its message gets the room instead of the clock.
         if (gpsState == GpsState.Fix) {
             Text(text = clock, color = Chalk, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
-        Chip(text = "MAPS", color = Chalk, onClick = onOpenMaps)
-        val lockColor by animateColorAsState(if (rotationLocked) Amber else Muted, label = "rotationChip")
-        Chip(
-            text = if (rotationLocked) "ROTATION LOCKED" else "LOCK ROTATION",
+        GlassChip(text = "MAPS", color = Chalk, onClick = onOpenMaps)
+        val lockColor by animateColorAsState(if (rotationLocked) Amber else Label, label = "rotationChip")
+        GlassChip(
+            text = if (rotationLocked) "LOCKED" else "LOCK",
             color = lockColor,
             onClick = onToggleRotationLock,
         )
     }
 }
 
+/**
+ * The running figures of the trip and the control that ends it. [spread] pushes the figures
+ * into the two bottom corners, leaving the middle to the dial.
+ */
 @Composable
-private fun GpsPill(
-    gpsState: GpsState,
-    accuracyMeters: Float,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val (text, color) = when (gpsState) {
-        GpsState.NoPermission -> "TAP TO ALLOW LOCATION" to Signal
-        GpsState.Disabled -> "GPS IS OFF · TAP TO TURN ON" to Signal
-        GpsState.Searching -> "SEARCHING FOR GPS" to Amber
-        GpsState.Fix -> "GPS ±${accuracyMeters.roundToInt()} M" to GoodSignal
+private fun TripBar(tracker: RideTracker, spread: Boolean, onEndTrip: () -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+        val cell = if (spread) Modifier else Modifier.weight(1f)
+        Stat("TRIP", formatKm(tracker.tripKm), "km", cell)
+        if (spread) Spacer(Modifier.width(24.dp))
+        Stat("MOVING", formatClockDuration(tracker.movingMillis), "h:mm", cell)
+        if (spread) Spacer(Modifier.weight(1f))
+        Stat("AVG", "${tracker.averageKmh.roundToInt()}", "km/h", cell)
+        if (spread) Spacer(Modifier.width(20.dp))
+        HoldChip(text = "HOLD TO END", color = Chalk, onHold = onEndTrip)
     }
-    val lamp by animateColorAsState(color, label = "gpsLamp")
-    val actionable = gpsState == GpsState.NoPermission || gpsState == GpsState.Disabled
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = actionable, onClick = onClick)
-            .padding(vertical = 10.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(lamp))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = text,
-            color = lamp,
-            fontSize = 12.sp,
-            letterSpacing = 1.5.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun Chip(text: String, color: Color, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    Text(
-        text = text,
-        color = color,
-        fontSize = 11.sp,
-        letterSpacing = 1.sp,
-        fontWeight = FontWeight.Medium,
-        maxLines = 1,
-        modifier = Modifier
-            .liquidPress(pressed)
-            .glass(PillShape)
-            .clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-    )
-}
-
-/** A glass pane that gives a little while held and runs [onHold] on a long press. */
-@Composable
-private fun Section(onHold: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    val hold by rememberUpdatedState(onHold)
-    var pressed by remember { mutableStateOf(false) }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .liquidPress(pressed, pressedScale = 0.975f)
-            .glass()
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        pressed = true
-                        tryAwaitRelease()
-                        pressed = false
-                    },
-                    onLongPress = { hold() },
-                )
-            }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        content = content,
-    )
-}
-
-@Composable
-private fun SectionHeader(label: String, hint: String) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = label,
-            modifier = Modifier.weight(1f),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            letterSpacing = 2.sp,
-            color = Muted,
-        )
-        Text(text = hint, fontSize = 9.sp, letterSpacing = 1.5.sp, color = Muted.copy(alpha = 0.6f))
-    }
-}
-
-@Composable
-private fun Stat(label: String, value: String, unit: String, modifier: Modifier = Modifier) {
-    Column(modifier) {
-        Text(text = label, fontSize = 9.sp, letterSpacing = 1.5.sp, color = Muted)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(text = value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Chalk)
-            Text(
-                text = " $unit",
-                fontSize = 10.sp,
-                color = Muted,
-                modifier = Modifier.padding(bottom = 3.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun SetOdometerDialog(currentKm: Double, onDismiss: () -> Unit, onConfirm: (Double) -> Unit) {
-    var text by remember { mutableStateOf(String.format(Locale.US, "%.1f", currentKm)) }
-    val parsed = text.replace(',', '.').toDoubleOrNull()?.takeIf { it in 0.0..999_999.9 }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Set odometer") },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                isError = parsed == null,
-                label = { Text("Total distance (km)") },
-                supportingText = { Text("Match it to the reading on your bike.") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { parsed?.let(onConfirm) }, enabled = parsed != null) { Text("Set") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 /** Runs [action] on a long press, without reacting to ordinary taps. */
@@ -440,18 +219,4 @@ private fun SetOdometerDialog(currentKm: Double, onDismiss: () -> Unit, onConfir
 private fun Modifier.onHold(action: () -> Unit): Modifier {
     val current by rememberUpdatedState(action)
     return pointerInput(Unit) { detectTapGestures(onLongPress = { current() }) }
-}
-
-private fun formatDuration(millis: Long): String {
-    val minutes = millis / 60_000L
-    return String.format(Locale.US, "%d:%02d", minutes / 60, minutes % 60)
-}
-
-private fun Context.clockText(): String = DateFormat.getTimeFormat(this).format(Date())
-
-private fun Context.openAppSettings() {
-    startActivity(
-        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-    )
 }
